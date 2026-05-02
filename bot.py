@@ -79,7 +79,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_registered(users, chat_id):
         store_id = users[chat_id].get("store_id", None)
         keywords = users[chat_id].get("keywords", [])
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"👋 Welcome back {name}!\n"
             f"🏪 Store: {store_id or 'not set'}\n"
             f"📋 Watch list: {len(keywords)} item(s)\n\n"
@@ -89,7 +89,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Already pending
     if chat_id in users and users[chat_id].get("status") == "pending":
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "⏳ Your registration request is still pending admin approval. "
             "You'll be notified once you're approved."
         )
@@ -99,7 +99,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users[chat_id] = {"name": name, "keywords": [], "status": "pending"}
     save_users(users)
 
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         f"👋 Hi {name}! Your registration request has been sent to the admin.\n"
         "You'll receive a message here once you're approved."
     )
@@ -117,7 +117,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(HELP_TEXT)
+    await update.effective_message.reply_text(HELP_TEXT)
 
 
 async def add_keyword(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -125,11 +125,11 @@ async def add_keyword(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
 
     if not is_registered(users, chat_id):
-        await update.message.reply_text("Please send /start first to register.")
+        await update.effective_message.reply_text("Please send /start first to register.")
         return
 
     if not context.args:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "Usage: /add <keyword>\n"
             "Multiple: /add beer, hummus, pasta"
         )
@@ -158,7 +158,7 @@ async def add_keyword(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if skipped:
         msg += ("\n" if msg else "") + "⚠️ Already on list: " + ", ".join(f"'{k}'" for k in skipped)
 
-    await update.message.reply_text(msg)
+    await update.effective_message.reply_text(msg)
 
 
 async def remove_keyword(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -166,11 +166,11 @@ async def remove_keyword(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
 
     if not is_registered(users, chat_id):
-        await update.message.reply_text("Please send /start first to register.")
+        await update.effective_message.reply_text("Please send /start first to register.")
         return
 
     if not context.args:
-        await update.message.reply_text("Usage: /remove <keyword>\nExample: /remove hummus")
+        await update.effective_message.reply_text("Usage: /remove <keyword>\nExample: /remove hummus")
         return
 
     keyword = " ".join(context.args)
@@ -179,9 +179,9 @@ async def remove_keyword(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if match:
         users[chat_id]["keywords"].remove(match)
         save_users(users)
-        await update.message.reply_text(f"✅ Removed '{match}' from your watch list.")
+        await update.effective_message.reply_text(f"✅ Removed '{match}' from your watch list.")
     else:
-        await update.message.reply_text(f"'{keyword}' wasn't on your watch list.")
+        await update.effective_message.reply_text(f"'{keyword}' wasn't on your watch list.")
 
 
 async def list_keywords(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -189,14 +189,14 @@ async def list_keywords(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
 
     if not is_registered(users, chat_id):
-        await update.message.reply_text("Please send /start first to register.")
+        await update.effective_message.reply_text("Please send /start first to register.")
         return
 
     keywords = users[chat_id].get("keywords", [])
     store_id = users[chat_id].get("store_id", DEFAULT_STORE_ID)
 
     if not keywords:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"🏪 Store ID: {store_id}\n\n"
             "Your watch list is empty.\nUse /add <keyword> to add items."
         )
@@ -207,7 +207,7 @@ async def list_keywords(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📋 Your watch list ({len(keywords)} items):\n"
         + "\n".join(f"• {k}" for k in keywords)
     )
-    await update.message.reply_text(msg)
+    await update.effective_message.reply_text(msg)
 
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -215,10 +215,10 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
 
     if not is_registered(users, chat_id):
-        await update.message.reply_text("You're not registered — nothing to remove.")
+        await update.effective_message.reply_text("You're not registered — nothing to remove.")
         return
 
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         "⚠️ Are you sure you want to stop?\n\n"
         "This will remove you from all future alerts and delete your watch list and store settings.\n\n"
         "Send /confirmstop to confirm, or just ignore this message to stay registered."
@@ -230,12 +230,12 @@ async def confirm_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
 
     if not is_registered(users, chat_id):
-        await update.message.reply_text("You're not registered — nothing to remove.")
+        await update.effective_message.reply_text("You're not registered — nothing to remove.")
         return
 
     del users[chat_id]
     save_users(users)
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         "✅ You've been unregistered. Your data has been deleted and you won't receive any more alerts.\n\n"
         "If you ever want to come back, just send /start."
     )
@@ -246,12 +246,12 @@ async def set_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
 
     if not is_registered(users, chat_id):
-        await update.message.reply_text("Please send /start first to register.")
+        await update.effective_message.reply_text("Please send /start first to register.")
         return
 
     if not context.args:
         current = users[chat_id].get("store_id", DEFAULT_STORE_ID)
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             f"Your current store ID is: {current}\n\n"
             "To change it: /store <store_id>\n"
             "To find nearby stores: /findstore <zip>"
@@ -262,9 +262,9 @@ async def set_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_first_time = "store_id" not in users[chat_id] or not users[chat_id].get("keywords")
     users[chat_id]["store_id"] = store_id
     save_users(users)
-    await update.message.reply_text(f"✅ Store set to {store_id}.")
+    await update.effective_message.reply_text(f"✅ Store set to {store_id}.")
     if is_first_time:
-        await update.message.reply_text(SETUP_STEP3)
+        await update.effective_message.reply_text(SETUP_STEP3)
 
 
 async def clear_keywords(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -272,12 +272,12 @@ async def clear_keywords(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
 
     if not is_registered(users, chat_id):
-        await update.message.reply_text("Please send /start first to register.")
+        await update.effective_message.reply_text("Please send /start first to register.")
         return
 
     users[chat_id]["keywords"] = []
     save_users(users)
-    await update.message.reply_text("🗑️ Your watch list has been cleared.")
+    await update.effective_message.reply_text("🗑️ Your watch list has been cleared.")
 
 
 async def find_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -285,15 +285,15 @@ async def find_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
 
     if not is_registered(users, chat_id):
-        await update.message.reply_text("Please send /start first to register.")
+        await update.effective_message.reply_text("Please send /start first to register.")
         return
 
     if not context.args:
-        await update.message.reply_text("Usage: /findstore <zip>\nExample: /findstore 33458")
+        await update.effective_message.reply_text("Usage: /findstore <zip>\nExample: /findstore 33458")
         return
 
     zip_code = context.args[0].strip()
-    await update.message.reply_text(f"🔍 Looking up Publix stores near {zip_code}...")
+    await update.effective_message.reply_text(f"🔍 Looking up Publix stores near {zip_code}...")
 
     try:
         url = (
@@ -305,7 +305,7 @@ async def find_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stores = response.json().get("stores", [])
 
         if not stores:
-            await update.message.reply_text(f"No Publix stores found near {zip_code}.")
+            await update.effective_message.reply_text(f"No Publix stores found near {zip_code}.")
             return
 
         msg = f"🏪 Publix stores near {zip_code}:\n\n"
@@ -317,11 +317,11 @@ async def find_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
             store_id = store.get("weeklyAd", {}).get("storeId", "N/A")
             msg += f"• {name}\n  {street}, {city}\n  ID: {store_id} → /store {store_id}\n\n"
 
-        await update.message.reply_text(msg)
-        await update.message.reply_text(SETUP_STEP2)
+        await update.effective_message.reply_text(msg)
+        await update.effective_message.reply_text(SETUP_STEP2)
 
     except Exception:
-        await update.message.reply_text("❌ Couldn't look up stores right now. Try again later.")
+        await update.effective_message.reply_text("❌ Couldn't look up stores right now. Try again later.")
 
 
 async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -329,12 +329,12 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
 
     if not is_registered(users, chat_id):
-        await update.message.reply_text("Please send /start first to register.")
+        await update.effective_message.reply_text("Please send /start first to register.")
         return
 
     keywords = users[chat_id].get("keywords", [])
     if not keywords:
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             "Your watch list is empty — nothing to scan for.\n"
             "Use /add <keyword> to add items first."
         )
@@ -358,25 +358,25 @@ async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
 
     if not is_admin(chat_id):
-        await update.message.reply_text("❌ You don't have permission to use this command.")
+        await update.effective_message.reply_text("❌ You don't have permission to use this command.")
         return
 
     if not context.args:
-        await update.message.reply_text("Usage: /approve <chat_id>")
+        await update.effective_message.reply_text("Usage: /approve <chat_id>")
         return
 
     target_id = context.args[0].strip()
     users = load_users()
 
     if target_id not in users:
-        await update.message.reply_text(f"No pending request found for {target_id}.")
+        await update.effective_message.reply_text(f"No pending request found for {target_id}.")
         return
 
     users[target_id]["status"] = "active"
     save_users(users)
 
     name = users[target_id].get("name", "User")
-    await update.message.reply_text(f"✅ Approved {name} ({target_id}).")
+    await update.effective_message.reply_text(f"✅ Approved {name} ({target_id}).")
 
     from scraper import send_telegram
     send_telegram(
@@ -390,25 +390,25 @@ async def deny_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
 
     if not is_admin(chat_id):
-        await update.message.reply_text("❌ You don't have permission to use this command.")
+        await update.effective_message.reply_text("❌ You don't have permission to use this command.")
         return
 
     if not context.args:
-        await update.message.reply_text("Usage: /deny <chat_id>")
+        await update.effective_message.reply_text("Usage: /deny <chat_id>")
         return
 
     target_id = context.args[0].strip()
     users = load_users()
 
     if target_id not in users:
-        await update.message.reply_text(f"No request found for {target_id}.")
+        await update.effective_message.reply_text(f"No request found for {target_id}.")
         return
 
     name = users[target_id].get("name", "User")
     del users[target_id]
     save_users(users)
 
-    await update.message.reply_text(f"🚫 Denied and removed {name} ({target_id}).")
+    await update.effective_message.reply_text(f"🚫 Denied and removed {name} ({target_id}).")
 
     from scraper import send_telegram
     send_telegram(target_id, "Sorry, your registration request was not approved.")
