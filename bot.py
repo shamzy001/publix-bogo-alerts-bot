@@ -17,6 +17,8 @@ from scraper import (
 
 load_dotenv()
 
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")
+
 HELP_TEXT = (
     "🤖 Publix BOGO Alert Bot — Commands\n"
     "─────────────────────────────────────\n"
@@ -60,7 +62,12 @@ SETUP_STEP3 = (
 
 
 def is_registered(users, chat_id):
-    return chat_id in users
+    """Returns True only for fully approved/active users."""
+    return chat_id in users and users[chat_id].get("status", "active") == "active"
+
+
+def is_admin(chat_id):
+    return str(chat_id) == str(ADMIN_CHAT_ID)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -68,15 +75,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.effective_user.first_name
     users = load_users()
 
-    if chat_id not in users:
-        users[chat_id] = {"name": name, "keywords": []}
-        save_users(users)
-        await update.message.reply_text(
-            f"👋 Welcome {name}! You're registered for Publix BOGO alerts.\n"
-            "Every Thursday at 2pm you'll automatically receive deals matching your watch list.\n\n"
-            + SETUP_STEP1
-        )
-    else:
+    # Already active
+    if is_registered(users, chat_id):
         store_id = users[chat_id].get("store_id", None)
         keywords = users[chat_id].get("keywords", [])
         await update.message.reply_text(
@@ -84,6 +84,35 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🏪 Store: {store_id or 'not set'}\n"
             f"📋 Watch list: {len(keywords)} item(s)\n\n"
             + HELP_TEXT
+        )
+        return
+
+    # Already pending
+    if chat_id in users and users[chat_id].get("status") == "pending":
+        await update.message.reply_text(
+            "⏳ Your registration request is still pending admin approval. "
+            "You'll be notified once you're approved."
+        )
+        return
+
+    # New user — put in pending and notify admin
+    users[chat_id] = {"name": name, "keywords": [], "status": "pending"}
+    save_users(users)
+
+    await update.message.reply_text(
+        f"👋 Hi {name}! Your registration request has been sent to the admin.\n"
+        "You'll receive a message here once you're approved."
+    )
+
+    if ADMIN_CHAT_ID:
+        from scraper import send_telegram
+        send_telegram(
+            ADMIN_CHAT_ID,
+            f"🔔 New registration request:\n"
+            f"Name: {name}\n"
+            f"Chat ID: {chat_id}\n\n"
+            f"Approve: /approve {chat_id}\n"
+            f"Deny:    /deny {chat_id}"
         )
 
 
@@ -325,6 +354,66 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await asyncio.to_thread(send_deals_to_user, chat_id, name, df_filtered)
 
 
+async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+
+    if not is_admin(chat_id):
+        await update.message.reply_text("❌ You don't have permission to use this command.")
+        return
+
+    if not context.args:
+        await update.message.reply_text("Usage: /approve <chat_id>")
+        return
+
+    target_id = context.args[0].strip()
+    users = load_users()
+
+    if target_id not in users:
+        await update.message.reply_text(f"No pending request found for {target_id}.")
+        return
+
+    users[target_id]["status"] = "active"
+    save_users(users)
+
+    name = users[target_id].get("name", "User")
+    await update.message.reply_text(f"✅ Approved {name} ({target_id}).")
+
+    from scraper import send_telegram
+    send_telegram(
+        target_id,
+        f"✅ You've been approved, {name}! You're now registered for Publix BOGO alerts.\n\n"
+        + SETUP_STEP1
+    )
+
+
+async def deny_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+
+    if not is_admin(chat_id):
+        await update.message.reply_text("❌ You don't have permission to use this command.")
+        return
+
+    if not context.args:
+        await update.message.reply_text("Usage: /deny <chat_id>")
+        return
+
+    target_id = context.args[0].strip()
+    users = load_users()
+
+    if target_id not in users:
+        await update.message.reply_text(f"No request found for {target_id}.")
+        return
+
+    name = users[target_id].get("name", "User")
+    del users[target_id]
+    save_users(users)
+
+    await update.message.reply_text(f"🚫 Denied and removed {name} ({target_id}).")
+
+    from scraper import send_telegram
+    send_telegram(target_id, "Sorry, your registration request was not approved.")
+
+
 async def weekly_scan(context: ContextTypes.DEFAULT_TYPE):
     """Runs every Thursday at 2pm ET — scrapes each store once, sends deals to all users."""
     print("⏰ Running weekly BOGO scan...")
@@ -370,6 +459,8 @@ def main():
     app.add_handler(CommandHandler("scan", scan))
     app.add_handler(CommandHandler("stop", stop))
     app.add_handler(CommandHandler("confirmstop", confirm_stop))
+    app.add_handler(CommandHandler("approve", approve_user))
+    app.add_handler(CommandHandler("deny", deny_user))
 
     # Weekly scan — every Thursday at 2:00pm Eastern
     eastern = ZoneInfo("America/New_York")
