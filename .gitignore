@@ -1,0 +1,16 @@
+# Credentials — never commit these
+.env
+
+# User data — contains personal chat IDs and names
+users.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.Python
+env/
+venv/
+
+# Misc
+.DS_Store

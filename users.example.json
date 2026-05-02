@@ -1,0 +1,11 @@
+{
+  "TELEGRAM_CHAT_ID": {
+    "name": "Your Name",
+    "store_id": "YOUR_STORE_ID",
+    "keywords": [
+      "beer",
+      "hummus",
+      "pasta"
+    ]
+  }
+}
