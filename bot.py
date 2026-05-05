@@ -25,6 +25,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Suppress noisy httpx request logs (they also expose the bot token in plain text)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")
 
 HELP_TEXT = (
