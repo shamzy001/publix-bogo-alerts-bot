@@ -1,5 +1,6 @@
 # scraper.py — shared scraping, filtering, and Telegram utilities
 
+import logging
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -15,6 +16,8 @@ import time
 import requests
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_STORE_ID = ""  # set via /store command in the bot or in users.json
 USERS_FILE = os.path.join(os.path.dirname(__file__), "users.json")
@@ -108,7 +111,7 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
                     "Validity": valid
                 })
 
-            print(f"Collected {len(results)} items so far...")
+            logger.info(f"Collected {len(results)} items so far...")
 
             driver.execute_script("window.scrollBy(0, window.innerHeight);")
             time.sleep(3)

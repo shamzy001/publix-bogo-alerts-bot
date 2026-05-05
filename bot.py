@@ -1,6 +1,7 @@
 # bot.py — Publix BOGO Telegram Bot
 
 import asyncio
+import logging
 import os
 import requests
 from collections import defaultdict
@@ -16,6 +17,13 @@ from scraper import (
 )
 
 load_dotenv()
+
+logging.basicConfig(
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")
 
@@ -416,11 +424,11 @@ async def deny_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def weekly_scan(context: ContextTypes.DEFAULT_TYPE):
     """Runs every Thursday at 2pm ET — scrapes each store once, sends deals to all users."""
-    print("⏰ Running weekly BOGO scan...")
+    logger.info("Running weekly BOGO scan...")
     users = load_users()
 
     if not users:
-        print("⚠️  No users found — skipping weekly scan.")
+        logger.warning("No users found — skipping weekly scan.")
         return
 
     # Group users by store so each store is only scraped once
@@ -430,7 +438,7 @@ async def weekly_scan(context: ContextTypes.DEFAULT_TYPE):
         store_groups[store_id].append((chat_id, user_data))
 
     for store_id, user_list in store_groups.items():
-        print(f"🔎 Scraping store {store_id} for {len(user_list)} user(s)...")
+        logger.info(f"Scraping store {store_id} for {len(user_list)} user(s)...")
         df = await asyncio.to_thread(get_bogo_deals, store_id)
 
         for chat_id, user_data in user_list:
@@ -441,7 +449,7 @@ async def weekly_scan(context: ContextTypes.DEFAULT_TYPE):
             df_filtered = find_matching_deals(df, keywords)
             await asyncio.to_thread(send_deals_to_user, chat_id, name, df_filtered)
 
-    print("✅ Weekly scan complete.")
+    logger.info("Weekly scan complete.")
 
 
 def main():
@@ -471,8 +479,8 @@ def main():
         name="weekly_bogo_scan"
     )
 
-    print("✅ Bot is running... (Ctrl+C to stop)")
-    print("📅 Weekly scan scheduled for Thursdays at 2:00pm ET")
+    logger.info("Bot is running... (Ctrl+C to stop)")
+    logger.info("Weekly scan scheduled for Thursdays at 2:00pm ET")
     app.run_polling()
 
 
