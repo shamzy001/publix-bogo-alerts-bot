@@ -9,6 +9,7 @@ from datetime import time
 from zoneinfo import ZoneInfo
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.error import NetworkError, TimedOut
 from dotenv import load_dotenv
 from scraper import (
     load_users, save_users,
@@ -27,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 # Suppress noisy httpx request logs (they also expose the bot token in plain text)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+# Suppress WebDriver Manager download chatter
+logging.getLogger("WDM").setLevel(logging.WARNING)
 
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")
 
@@ -425,6 +428,16 @@ async def deny_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     send_telegram(target_id, "Sorry, your registration request was not approved.")
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    if isinstance(context.error, (NetworkError, TimedOut)):
+        logger.warning(f"Network error (bot will retry): {context.error}")
+        return
+    logger.error(f"Unexpected error: {context.error}", exc_info=context.error)
+    if ADMIN_CHAT_ID:
+        from scraper import send_telegram
+        send_telegram(ADMIN_CHAT_ID, f"⚠️ Bot error: {context.error}")
+
+
 async def weekly_scan(context: ContextTypes.DEFAULT_TYPE):
     """Runs every Thursday at 2pm ET — scrapes each store once, sends deals to all users."""
     logger.info("Running weekly BOGO scan...")
@@ -472,6 +485,7 @@ def main():
     app.add_handler(CommandHandler("confirmstop", confirm_stop))
     app.add_handler(CommandHandler("approve", approve_user))
     app.add_handler(CommandHandler("deny", deny_user))
+    app.add_error_handler(error_handler)
 
     # Weekly scan — every Thursday at 2:00pm Eastern
     eastern = ZoneInfo("America/New_York")
