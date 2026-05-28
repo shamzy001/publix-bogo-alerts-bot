@@ -1,5 +1,7 @@
 # scraper.py — shared scraping, filtering, and Telegram utilities
 
+import logging
+import shutil
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -16,24 +18,80 @@ import requests
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_STORE_ID = ""  # set via /store command in the bot or in users.json
 USERS_FILE = os.path.join(os.path.dirname(__file__), "users.json")
 TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 
 # -----------------------------------------------------
-# USER MANAGEMENT
+# USER MANAGEMENT — Postgres when DATABASE_URL is set,
+# falls back to users.json for local development
 # -----------------------------------------------------
+def _get_db():
+    import psycopg2
+    return psycopg2.connect(DATABASE_URL)
+
+
+def init_db():
+    """Create the users table if it doesn't exist. Called once on bot startup."""
+    if not DATABASE_URL:
+        return
+    import psycopg2
+    with _get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    chat_id TEXT PRIMARY KEY,
+                    data JSONB NOT NULL
+                )
+            """)
+        conn.commit()
+
+
 def load_users():
-    if os.path.exists(USERS_FILE):
-        with open(USERS_FILE) as f:
-            return json.load(f)
-    return {}
+    if DATABASE_URL:
+        import psycopg2.extras
+        with _get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT chat_id, data FROM users")
+                rows = cur.fetchall()
+        return {row[0]: row[1] for row in rows}
+    else:
+        if os.path.exists(USERS_FILE):
+            with open(USERS_FILE) as f:
+                return json.load(f)
+        return {}
 
 
 def save_users(users):
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f, indent=2)
+    if DATABASE_URL:
+        import psycopg2.extras
+        with _get_db() as conn:
+            with conn.cursor() as cur:
+                # Remove users that were deleted (e.g. /confirmstop)
+                if users:
+                    cur.execute(
+                        "DELETE FROM users WHERE chat_id != ALL(%s)",
+                        (list(users.keys()),)
+                    )
+                else:
+                    cur.execute("DELETE FROM users")
+                # Upsert all current users
+                for chat_id, data in users.items():
+                    cur.execute(
+                        """
+                        INSERT INTO users (chat_id, data) VALUES (%s, %s)
+                        ON CONFLICT (chat_id) DO UPDATE SET data = EXCLUDED.data
+                        """,
+                        (chat_id, psycopg2.extras.Json(data))
+                    )
+            conn.commit()
+    else:
+        with open(USERS_FILE, "w") as f:
+            json.dump(users, f, indent=2)
 
 
 # -----------------------------------------------------
@@ -53,15 +111,26 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
 
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=options
+    # On Linux (Railway), find Chromium automatically; on Windows webdriver-manager handles it
+    chrome_bin = (
+        os.environ.get("CHROME_BIN")
+        or shutil.which("chromium")
+        or shutil.which("chromium-browser")
     )
+    if chrome_bin:
+        options.binary_location = chrome_bin
+
+    # Use system chromedriver if available (Railway), otherwise download via webdriver-manager
+    chromedriver_path = shutil.which("chromedriver")
+    service = Service(chromedriver_path) if chromedriver_path else Service(ChromeDriverManager().install())
+
+    driver = webdriver.Chrome(service=service, options=options)
 
     url = f"https://www.publix.com/savings/weekly-ad/bogo/?storeId={store_id}"
     driver.get(url)
@@ -108,7 +177,7 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
                     "Validity": valid
                 })
 
-            print(f"Collected {len(results)} items so far...")
+            logger.info(f"Collected {len(results)} items so far...")
 
             driver.execute_script("window.scrollBy(0, window.innerHeight);")
             time.sleep(3)

@@ -4,3 +4,4 @@ pandas
 python-telegram-bot[job-queue]
 python-dotenv
 requests
+psycopg2-binary

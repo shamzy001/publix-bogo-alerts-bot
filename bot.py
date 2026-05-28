@@ -12,7 +12,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.error import NetworkError, TimedOut
 from dotenv import load_dotenv
 from scraper import (
-    load_users, save_users,
+    load_users, save_users, init_db,
     get_bogo_deals, find_matching_deals,
     send_deals_to_user, DEFAULT_STORE_ID
 )
@@ -497,6 +497,7 @@ def main():
         job_kwargs={"misfire_grace_time": 300}  # run if up to 5 min late
     )
 
+    init_db()
     logger.info("Bot is running... (Ctrl+C to stop)")
     logger.info("Weekly scan scheduled for Thursdays at 3:00pm ET")
     app.run_polling()
