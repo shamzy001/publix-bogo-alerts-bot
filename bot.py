@@ -70,7 +70,7 @@ SETUP_STEP3 = (
     "You can add multiple at once too:\n"
     "/add beer, hummus, pasta\n\n"
     "Once you're set up, you'll automatically receive your matching deals "
-    "every Thursday at 2pm 📅\n"
+    "every Thursday at 3pm 📅\n"
     "You can also check anytime with /scan 🎉"
 )
 
@@ -487,18 +487,18 @@ def main():
     app.add_handler(CommandHandler("deny", deny_user))
     app.add_error_handler(error_handler)
 
-    # Weekly scan — every Thursday at 2:00pm Eastern
+    # Weekly scan — every Thursday at 3:00pm Eastern
     eastern = ZoneInfo("America/New_York")
     app.job_queue.run_daily(
         weekly_scan,
-        time=time(14, 0, 0, tzinfo=eastern),
+        time=time(15, 0, 0, tzinfo=eastern),
         days=(4,),  # 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
         name="weekly_bogo_scan",
         job_kwargs={"misfire_grace_time": 300}  # run if up to 5 min late
     )
 
     logger.info("Bot is running... (Ctrl+C to stop)")
-    logger.info("Weekly scan scheduled for Thursdays at 2:00pm ET")
+    logger.info("Weekly scan scheduled for Thursdays at 3:00pm ET")
     app.run_polling()
 
 
