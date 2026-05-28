@@ -493,7 +493,8 @@ def main():
         weekly_scan,
         time=time(14, 0, 0, tzinfo=eastern),
         days=(4,),  # 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
-        name="weekly_bogo_scan"
+        name="weekly_bogo_scan",
+        job_kwargs={"misfire_grace_time": 300}  # run if up to 5 min late
     )
 
     logger.info("Bot is running... (Ctrl+C to stop)")
