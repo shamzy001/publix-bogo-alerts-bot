@@ -126,8 +126,11 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
     if chrome_bin:
         options.binary_location = chrome_bin
 
-    # Use system chromedriver if available (Railway), otherwise download via webdriver-manager
-    chromedriver_path = shutil.which("chromedriver")
+    # Use system chromedriver if available (Railway/Docker), otherwise download via webdriver-manager
+    chromedriver_path = (
+        os.environ.get("CHROMEDRIVER_PATH")
+        or shutil.which("chromedriver")
+    )
     service = Service(chromedriver_path) if chromedriver_path else Service(ChromeDriverManager().install())
 
     driver = webdriver.Chrome(service=service, options=options)
