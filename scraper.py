@@ -112,6 +112,7 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -145,7 +146,7 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
 
         seen = set()
         stagnant = 0
-        max_stagnant = 3
+        max_stagnant = 6
         results = []
 
         while True:
@@ -183,7 +184,7 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
             logger.info(f"Collected {len(results)} items so far...")
 
             driver.execute_script("window.scrollBy(0, window.innerHeight);")
-            time.sleep(3)
+            time.sleep(5)
 
             if new_found == 0:
                 stagnant += 1
