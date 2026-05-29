@@ -154,7 +154,7 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
             # Jump to absolute bottom to trigger lazy-loading of all remaining items
             current_height = driver.execute_script("return document.body.scrollHeight")
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(5)
+            time.sleep(3)
 
             # Stop when page height hasn't grown after several attempts
             if current_height == last_height:
