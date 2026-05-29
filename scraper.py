@@ -146,12 +146,26 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
 
         seen = set()
         stagnant = 0
-        max_stagnant = 6
+        max_stagnant = 4
+        last_height = 0
         results = []
 
         while True:
+            # Jump to absolute bottom to trigger lazy-loading of all remaining items
+            current_height = driver.execute_script("return document.body.scrollHeight")
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(5)
+
+            # Stop when page height hasn't grown after several attempts
+            if current_height == last_height:
+                stagnant += 1
+                if stagnant >= max_stagnant:
+                    break
+            else:
+                stagnant = 0
+            last_height = current_height
+
             bogo_cards = driver.find_elements(By.CSS_SELECTOR, "li[id^='bogo-']")
-            new_found = 0
 
             for card in bogo_cards:
                 try:
@@ -162,7 +176,6 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
                 if not product or product in seen:
                     continue
                 seen.add(product)
-                new_found += 1
 
                 try:
                     offer = card.find_element(By.CSS_SELECTOR, ".p-savings-badge__text span").text.strip()
@@ -182,16 +195,6 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
                 })
 
             logger.info(f"Collected {len(results)} items so far...")
-
-            driver.execute_script("window.scrollBy(0, window.innerHeight);")
-            time.sleep(5)
-
-            if new_found == 0:
-                stagnant += 1
-                if stagnant >= max_stagnant:
-                    break
-            else:
-                stagnant = 0
 
     finally:
         driver.quit()
