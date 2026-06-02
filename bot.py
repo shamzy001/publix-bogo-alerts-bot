@@ -7,8 +7,8 @@ import requests
 from collections import defaultdict
 from datetime import time
 from zoneinfo import ZoneInfo
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, filters, ContextTypes
 from telegram.error import NetworkError, TimedOut
 from dotenv import load_dotenv
 from scraper import (
@@ -32,6 +32,8 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("WDM").setLevel(logging.WARNING)
 
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")
+
+WAITING_FOR_ZIP = 1  # ConversationHandler state for /findstore
 
 HELP_TEXT = (
     "🤖 Publix BOGO Alert Bot\n"
@@ -352,21 +354,82 @@ async def clear_keywords(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def find_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def findstore_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     users = load_users()
 
     if not is_registered(users, chat_id):
         await update.effective_message.reply_text("Please send /start first to register.")
-        return
+        return ConversationHandler.END
 
-    if not context.args:
-        await update.effective_message.reply_text("Usage: /findstore <zip>\nExample: /findstore 33458")
-        return
+    # If zip already provided (/findstore 33458), skip the prompt
+    if context.args:
+        await _do_store_lookup(update, context, context.args[0].strip())
+        return ConversationHandler.END
 
-    zip_code = context.args[0].strip()
-    await update.effective_message.reply_text(f"🔍 Looking up Publix stores near {zip_code}...")
+    await update.effective_message.reply_text(
+        "🏪 Let's find your nearest Publix!\n\n"
+        "Tap the button below to share your location, or just type your zip code:",
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton("📍 Share my location", request_location=True)]],
+            one_time_keyboard=True,
+            resize_keyboard=True,
+        )
+    )
+    return WAITING_FOR_ZIP
 
+
+async def findstore_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.location:
+        lat = update.message.location.latitude
+        lon = update.message.location.longitude
+        await update.message.reply_text(
+            "📍 Got your location! Looking up nearby stores...",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        try:
+            r = requests.get(
+                f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}",
+                headers={"User-Agent": "PublixBOGOAlertsBot/1.0"},
+                timeout=10
+            )
+            zip_code = r.json().get("address", {}).get("postcode", "").split("-")[0]
+            if not zip_code:
+                await update.message.reply_text(
+                    "Couldn't determine your zip code from that location.\n"
+                    "Please type your zip code instead:"
+                )
+                return WAITING_FOR_ZIP
+        except Exception:
+            await update.message.reply_text(
+                "Couldn't reach the location service. Please type your zip code instead:"
+            )
+            return WAITING_FOR_ZIP
+    else:
+        zip_code = update.message.text.strip()
+        if not zip_code.isdigit() or len(zip_code) != 5:
+            await update.message.reply_text(
+                "Please enter a valid 5-digit US zip code (e.g. 33458):",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            return WAITING_FOR_ZIP
+        await update.message.reply_text(
+            f"🔍 Looking up Publix stores near {zip_code}...",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
+    await _do_store_lookup(update, context, zip_code)
+    return ConversationHandler.END
+
+
+async def findstore_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_message.reply_text(
+        "Cancelled.", reply_markup=ReplyKeyboardRemove()
+    )
+    return ConversationHandler.END
+
+
+async def _do_store_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE, zip_code: str):
     try:
         url = (
             f"https://services.publix.com/storelocator/api/v1/stores/"
@@ -377,7 +440,9 @@ async def find_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stores = response.json().get("stores", [])
 
         if not stores:
-            await update.effective_message.reply_text(f"No Publix stores found near {zip_code}.")
+            await update.effective_message.reply_text(
+                f"No Publix stores found near {zip_code}. Double-check the zip code and try again."
+            )
             return
 
         msg = f"🏪 Publix stores near {zip_code}:\n\n"
@@ -388,7 +453,7 @@ async def find_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
             street = address.get("streetAddress", "")
             city = address.get("city", "")
             store_id = store.get("weeklyAd", {}).get("storeId", "N/A")
-            msg += f"• {name}\n  {street}, {city}\n  ID: {store_id}\n\n"
+            msg += f"• {name}\n  {street}, {city}\n\n"
             if store_id != "N/A":
                 label = f"📍 {name}"
                 if len(label) > 40:
@@ -401,7 +466,9 @@ async def find_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     except Exception:
-        await update.effective_message.reply_text("❌ Couldn't look up stores right now. Try again later.")
+        await update.effective_message.reply_text(
+            "❌ Couldn't look up stores right now. Try again later."
+        )
 
 
 async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -739,6 +806,20 @@ def main():
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = Application.builder().token(token).build()
 
+    # /findstore — multi-step: prompt → location or zip → store list
+    findstore_conv = ConversationHandler(
+        entry_points=[CommandHandler("findstore", findstore_start)],
+        states={
+            WAITING_FOR_ZIP: [
+                MessageHandler(filters.LOCATION, findstore_receive),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, findstore_receive),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", findstore_cancel)],
+        allow_reentry=True,
+    )
+
+    app.add_handler(findstore_conv)
     app.add_handler(CommandHandler("start",       start))
     app.add_handler(CommandHandler("help",        help_command))
     app.add_handler(CommandHandler("add",         add_keyword))
@@ -746,7 +827,6 @@ def main():
     app.add_handler(CommandHandler("list",        list_keywords))
     app.add_handler(CommandHandler("clear",       clear_keywords))
     app.add_handler(CommandHandler("store",       set_store))
-    app.add_handler(CommandHandler("findstore",   find_store))
     app.add_handler(CommandHandler("scan",        scan))
     app.add_handler(CommandHandler("stop",        stop))
     app.add_handler(CommandHandler("confirmstop", confirm_stop))
