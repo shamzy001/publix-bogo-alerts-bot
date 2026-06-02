@@ -7,8 +7,8 @@ import requests
 from collections import defaultdict
 from datetime import time
 from zoneinfo import ZoneInfo
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.error import NetworkError, TimedOut
 from dotenv import load_dotenv
 from scraper import (
@@ -34,16 +34,17 @@ logging.getLogger("WDM").setLevel(logging.WARNING)
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")
 
 HELP_TEXT = (
-    "🤖 Publix BOGO Alert Bot — Commands\n"
+    "🤖 Publix BOGO Alert Bot\n"
     "─────────────────────────────────────\n"
-    "/findstore <zip>  — find nearby stores and their IDs\n"
+    "Tap a button below, or type a command:\n\n"
+    "/add <item>       — add to watch list\n"
+    "/remove <item>    — remove from watch list\n"
     "/store <id>       — set your Publix store\n"
-    "/add <item>       — add item to your watch list\n"
-    "/remove <item>    — remove item from your watch list\n"
-    "/list             — show your watch list and store\n"
-    "/clear            — clear your entire watch list\n"
-    "/scan             — scan Publix now and send your deals\n"
-    "/stop             — unregister and delete all your data\n"
+    "/findstore <zip>  — find nearby store IDs\n"
+    "/scan             — scan Publix now\n"
+    "/list             — show your watch list\n"
+    "/clear            — clear your watch list\n"
+    "/stop             — unregister\n"
     "/help             — show this message"
 )
 
@@ -75,6 +76,52 @@ SETUP_STEP3 = (
 )
 
 
+# -----------------------------------------------------
+# KEYBOARD BUILDERS
+# -----------------------------------------------------
+
+def main_menu_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔍 Scan Now", callback_data="scan"),
+            InlineKeyboardButton("📋 My List",  callback_data="list"),
+        ],
+        [
+            InlineKeyboardButton("➕ Add Item",   callback_data="add_prompt"),
+            InlineKeyboardButton("❓ Help",        callback_data="help"),
+        ],
+        [InlineKeyboardButton("🚫 Stop Alerts", callback_data="stop_confirm")],
+    ])
+
+
+def list_keyboard(keywords):
+    """Watch list with a ✕ remove button per keyword, plus a back-to-menu button."""
+    rows = [
+        [InlineKeyboardButton(f"✕  {k}", callback_data=f"remove:{k[:50]}")]
+        for k in keywords
+    ]
+    rows.append([InlineKeyboardButton("🏠 Main Menu", callback_data="menu")])
+    return InlineKeyboardMarkup(rows)
+
+
+def stop_confirm_keyboard():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Yes, stop", callback_data="stop_yes"),
+        InlineKeyboardButton("❌ Cancel",    callback_data="stop_no"),
+    ]])
+
+
+def admin_approval_keyboard(target_chat_id):
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Approve", callback_data=f"approve:{target_chat_id}"),
+        InlineKeyboardButton("🚫 Deny",   callback_data=f"deny:{target_chat_id}"),
+    ]])
+
+
+# -----------------------------------------------------
+# HELPERS
+# -----------------------------------------------------
+
 def is_registered(users, chat_id):
     """Returns True only for fully approved/active users."""
     return chat_id in users and users[chat_id].get("status", "active") == "active"
@@ -83,6 +130,10 @@ def is_registered(users, chat_id):
 def is_admin(chat_id):
     return str(chat_id) == str(ADMIN_CHAT_ID)
 
+
+# -----------------------------------------------------
+# COMMAND HANDLERS
+# -----------------------------------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
@@ -96,8 +147,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(
             f"👋 Welcome back {name}!\n"
             f"🏪 Store: {store_id or 'not set'}\n"
-            f"📋 Watch list: {len(keywords)} item(s)\n\n"
-            + HELP_TEXT
+            f"📋 Watch list: {len(keywords)} item(s)",
+            reply_markup=main_menu_keyboard()
         )
         return
 
@@ -120,18 +171,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if ADMIN_CHAT_ID:
         from scraper import send_telegram
-        send_telegram(
-            ADMIN_CHAT_ID,
-            f"🔔 New registration request:\n"
-            f"Name: {name}\n"
-            f"Chat ID: {chat_id}\n\n"
-            f"Approve: /approve {chat_id}\n"
-            f"Deny:    /deny {chat_id}"
+        from telegram import Bot
+        bot = context.bot
+        await bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=(
+                f"🔔 New registration request:\n"
+                f"Name: {name}\n"
+                f"Chat ID: {chat_id}"
+            ),
+            reply_markup=admin_approval_keyboard(chat_id)
         )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text(HELP_TEXT)
+    await update.effective_message.reply_text(HELP_TEXT, reply_markup=main_menu_keyboard())
 
 
 async def add_keyword(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -172,7 +226,7 @@ async def add_keyword(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if skipped:
         msg += ("\n" if msg else "") + "⚠️ Already on list: " + ", ".join(f"'{k}'" for k in skipped)
 
-    await update.effective_message.reply_text(msg)
+    await update.effective_message.reply_text(msg, reply_markup=main_menu_keyboard())
 
 
 async def remove_keyword(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -193,7 +247,10 @@ async def remove_keyword(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if match:
         users[chat_id]["keywords"].remove(match)
         save_users(users)
-        await update.effective_message.reply_text(f"✅ Removed '{match}' from your watch list.")
+        await update.effective_message.reply_text(
+            f"✅ Removed '{match}' from your watch list.",
+            reply_markup=main_menu_keyboard()
+        )
     else:
         await update.effective_message.reply_text(f"'{keyword}' wasn't on your watch list.")
 
@@ -212,16 +269,13 @@ async def list_keywords(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not keywords:
         await update.effective_message.reply_text(
             f"🏪 Store ID: {store_id}\n\n"
-            "Your watch list is empty.\nUse /add <keyword> to add items."
+            "Your watch list is empty.\nUse /add <keyword> to add items.",
+            reply_markup=main_menu_keyboard()
         )
         return
 
-    msg = (
-        f"🏪 Store ID: {store_id}\n\n"
-        f"📋 Your watch list ({len(keywords)} items):\n"
-        + "\n".join(f"• {k}" for k in keywords)
-    )
-    await update.effective_message.reply_text(msg)
+    msg = f"🏪 Store ID: {store_id}\n\n📋 Watch list — tap an item to remove it:"
+    await update.effective_message.reply_text(msg, reply_markup=list_keyboard(keywords))
 
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -234,12 +288,13 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.effective_message.reply_text(
         "⚠️ Are you sure you want to stop?\n\n"
-        "This will remove you from all future alerts and delete your watch list and store settings.\n\n"
-        "Send /confirmstop to confirm, or just ignore this message to stay registered."
+        "This will remove you from all future alerts and delete your watch list and store settings.",
+        reply_markup=stop_confirm_keyboard()
     )
 
 
 async def confirm_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Text fallback for /confirmstop — primary flow is now the inline button."""
     chat_id = str(update.effective_chat.id)
     users = load_users()
 
@@ -250,7 +305,7 @@ async def confirm_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     del users[chat_id]
     save_users(users)
     await update.effective_message.reply_text(
-        "✅ You've been unregistered. Your data has been deleted and you won't receive any more alerts.\n\n"
+        "✅ You've been unregistered. Your data has been deleted.\n\n"
         "If you ever want to come back, just send /start."
     )
 
@@ -291,7 +346,10 @@ async def clear_keywords(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     users[chat_id]["keywords"] = []
     save_users(users)
-    await update.effective_message.reply_text("🗑️ Your watch list has been cleared.")
+    await update.effective_message.reply_text(
+        "🗑️ Your watch list has been cleared.",
+        reply_markup=main_menu_keyboard()
+    )
 
 
 async def find_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -362,10 +420,10 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await msg.reply_text(f"🔍 Scanning store {store_id}, hang tight... (this takes 2-3 minutes)")
 
-    # Run the blocking scraper in a background thread so the bot stays responsive
     df = await asyncio.to_thread(get_bogo_deals, store_id)
     df_filtered = find_matching_deals(df, keywords)
     await asyncio.to_thread(send_deals_to_user, chat_id, name, df_filtered)
+    await context.bot.send_message(chat_id=chat_id, text="What's next?", reply_markup=main_menu_keyboard())
 
 
 async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -380,24 +438,7 @@ async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     target_id = context.args[0].strip()
-    users = load_users()
-
-    if target_id not in users:
-        await update.effective_message.reply_text(f"No pending request found for {target_id}.")
-        return
-
-    users[target_id]["status"] = "active"
-    save_users(users)
-
-    name = users[target_id].get("name", "User")
-    await update.effective_message.reply_text(f"✅ Approved {name} ({target_id}).")
-
-    from scraper import send_telegram
-    send_telegram(
-        target_id,
-        f"✅ You've been approved, {name}! You're now registered for Publix BOGO alerts.\n\n"
-        + SETUP_STEP1
-    )
+    await _approve(context, target_id, update.effective_message)
 
 
 async def deny_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -412,21 +453,209 @@ async def deny_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     target_id = context.args[0].strip()
-    users = load_users()
+    await _deny(context, target_id, update.effective_message)
 
+
+# -----------------------------------------------------
+# SHARED APPROVE / DENY LOGIC
+# (used by both slash commands and inline buttons)
+# -----------------------------------------------------
+
+async def _approve(context, target_id, reply_to=None):
+    users = load_users()
     if target_id not in users:
-        await update.effective_message.reply_text(f"No request found for {target_id}.")
+        if reply_to:
+            await reply_to.reply_text(f"No pending request found for {target_id}.")
+        return
+
+    users[target_id]["status"] = "active"
+    save_users(users)
+
+    name = users[target_id].get("name", "User")
+    if reply_to:
+        await reply_to.reply_text(f"✅ Approved {name} ({target_id}).")
+
+    from scraper import send_telegram
+    send_telegram(
+        target_id,
+        f"✅ You've been approved, {name}! You're now registered for Publix BOGO alerts.\n\n"
+        + SETUP_STEP1
+    )
+
+
+async def _deny(context, target_id, reply_to=None):
+    users = load_users()
+    if target_id not in users:
+        if reply_to:
+            await reply_to.reply_text(f"No request found for {target_id}.")
         return
 
     name = users[target_id].get("name", "User")
     del users[target_id]
     save_users(users)
 
-    await update.effective_message.reply_text(f"🚫 Denied and removed {name} ({target_id}).")
+    if reply_to:
+        await reply_to.reply_text(f"🚫 Denied and removed {name} ({target_id}).")
 
     from scraper import send_telegram
     send_telegram(target_id, "Sorry, your registration request was not approved.")
 
+
+# -----------------------------------------------------
+# INLINE BUTTON HANDLER
+# -----------------------------------------------------
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()  # must acknowledge within 10s or Telegram shows a spinner
+
+    chat_id = str(query.from_user.id)
+    data = query.data
+    users = load_users()
+
+    # ── Main menu ──────────────────────────────────────
+    if data == "menu":
+        if not is_registered(users, chat_id):
+            await query.edit_message_text("Please send /start first to register.")
+            return
+        store_id = users[chat_id].get("store_id", "not set")
+        keywords = users[chat_id].get("keywords", [])
+        await query.edit_message_text(
+            f"🏪 Store: {store_id}  |  📋 {len(keywords)} item(s) on watch list",
+            reply_markup=main_menu_keyboard()
+        )
+
+    # ── Scan ───────────────────────────────────────────
+    elif data == "scan":
+        if not is_registered(users, chat_id):
+            await query.edit_message_text("Please send /start first to register.")
+            return
+        keywords = users[chat_id].get("keywords", [])
+        if not keywords:
+            await query.edit_message_text(
+                "Your watch list is empty.\nUse /add <keyword> to add items first.",
+                reply_markup=main_menu_keyboard()
+            )
+            return
+        name = users[chat_id].get("name", "User")
+        store_id = users[chat_id].get("store_id", DEFAULT_STORE_ID)
+        await query.edit_message_text(f"🔍 Scanning store {store_id}, hang tight... (this takes 2-3 minutes)")
+        df = await asyncio.to_thread(get_bogo_deals, store_id)
+        df_filtered = find_matching_deals(df, keywords)
+        await asyncio.to_thread(send_deals_to_user, chat_id, name, df_filtered)
+        await context.bot.send_message(chat_id=chat_id, text="Scan complete! What's next?", reply_markup=main_menu_keyboard())
+
+    # ── List ───────────────────────────────────────────
+    elif data == "list":
+        if not is_registered(users, chat_id):
+            await query.edit_message_text("Please send /start first to register.")
+            return
+        keywords = users[chat_id].get("keywords", [])
+        store_id = users[chat_id].get("store_id", DEFAULT_STORE_ID)
+        if not keywords:
+            await query.edit_message_text(
+                f"🏪 Store ID: {store_id}\n\nYour watch list is empty.\nUse /add <keyword> to add items.",
+                reply_markup=main_menu_keyboard()
+            )
+        else:
+            await query.edit_message_text(
+                f"🏪 Store ID: {store_id}\n\n📋 Watch list — tap an item to remove it:",
+                reply_markup=list_keyboard(keywords)
+            )
+
+    # ── Help ───────────────────────────────────────────
+    elif data == "help":
+        await query.edit_message_text(HELP_TEXT, reply_markup=main_menu_keyboard())
+
+    # ── Add prompt ────────────────────────────────────
+    elif data == "add_prompt":
+        await query.edit_message_text(
+            "Type your item(s) like this:\n\n"
+            "/add beer\n"
+            "/add hummus, pasta, wine\n\n"
+            "Multiple keywords separated by commas are supported.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Main Menu", callback_data="menu")
+            ]])
+        )
+
+    # ── Remove keyword (from list view) ───────────────
+    elif data.startswith("remove:"):
+        if not is_registered(users, chat_id):
+            await query.edit_message_text("Please send /start first to register.")
+            return
+        keyword = data[7:]
+        match = next((k for k in users[chat_id]["keywords"] if k.lower() == keyword.lower()), None)
+        if match:
+            users[chat_id]["keywords"].remove(match)
+            save_users(users)
+        # Refresh the list view
+        keywords = users[chat_id].get("keywords", [])
+        store_id = users[chat_id].get("store_id", DEFAULT_STORE_ID)
+        if not keywords:
+            await query.edit_message_text(
+                f"🏪 Store ID: {store_id}\n\nWatch list is now empty.",
+                reply_markup=main_menu_keyboard()
+            )
+        else:
+            await query.edit_message_text(
+                f"🏪 Store ID: {store_id}\n\n📋 Watch list — tap an item to remove it:",
+                reply_markup=list_keyboard(keywords)
+            )
+
+    # ── Stop confirmation ─────────────────────────────
+    elif data == "stop_confirm":
+        if not is_registered(users, chat_id):
+            await query.edit_message_text("You're not registered — nothing to remove.")
+            return
+        await query.edit_message_text(
+            "⚠️ Are you sure you want to stop?\n\n"
+            "This will remove you from all future alerts and delete your watch list and store settings.",
+            reply_markup=stop_confirm_keyboard()
+        )
+
+    elif data == "stop_yes":
+        if not is_registered(users, chat_id):
+            await query.edit_message_text("You're not registered — nothing to remove.")
+            return
+        del users[chat_id]
+        save_users(users)
+        await query.edit_message_text(
+            "✅ You've been unregistered. Your data has been deleted.\n\n"
+            "If you ever want to come back, just send /start."
+        )
+
+    elif data == "stop_no":
+        await query.edit_message_text(
+            "Cancelled — you're still registered. 👍",
+            reply_markup=main_menu_keyboard()
+        )
+
+    # ── Admin: approve / deny ─────────────────────────
+    elif data.startswith("approve:"):
+        if not is_admin(chat_id):
+            await query.answer("❌ Admins only.", show_alert=True)
+            return
+        target_id = data[8:]
+        await _approve(context, target_id)
+        await query.edit_message_text(
+            query.message.text + "\n\n✅ Approved."
+        )
+
+    elif data.startswith("deny:"):
+        if not is_admin(chat_id):
+            await query.answer("❌ Admins only.", show_alert=True)
+            return
+        target_id = data[5:]
+        await _deny(context, target_id)
+        await query.edit_message_text(
+            query.message.text + "\n\n🚫 Denied."
+        )
+
+
+# -----------------------------------------------------
+# ERROR HANDLER
+# -----------------------------------------------------
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     if isinstance(context.error, (NetworkError, TimedOut)):
@@ -438,8 +667,12 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
         send_telegram(ADMIN_CHAT_ID, f"⚠️ Bot error: {context.error}")
 
 
+# -----------------------------------------------------
+# WEEKLY SCAN JOB
+# -----------------------------------------------------
+
 async def weekly_scan(context: ContextTypes.DEFAULT_TYPE):
-    """Runs every Thursday at 2pm ET — scrapes each store once, sends deals to all users."""
+    """Runs every Thursday at 3pm ET — scrapes each store once, sends deals to all users."""
     logger.info("Running weekly BOGO scan...")
     users = load_users()
 
@@ -447,7 +680,6 @@ async def weekly_scan(context: ContextTypes.DEFAULT_TYPE):
         logger.warning("No users found — skipping weekly scan.")
         return
 
-    # Group users by store so each store is only scraped once
     store_groups = defaultdict(list)
     for chat_id, user_data in users.items():
         store_id = user_data.get("store_id", DEFAULT_STORE_ID)
@@ -468,33 +700,37 @@ async def weekly_scan(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Weekly scan complete.")
 
 
+# -----------------------------------------------------
+# MAIN
+# -----------------------------------------------------
+
 def main():
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = Application.builder().token(token).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("add", add_keyword))
-    app.add_handler(CommandHandler("remove", remove_keyword))
-    app.add_handler(CommandHandler("list", list_keywords))
-    app.add_handler(CommandHandler("clear", clear_keywords))
-    app.add_handler(CommandHandler("store", set_store))
-    app.add_handler(CommandHandler("findstore", find_store))
-    app.add_handler(CommandHandler("scan", scan))
-    app.add_handler(CommandHandler("stop", stop))
+    app.add_handler(CommandHandler("start",       start))
+    app.add_handler(CommandHandler("help",        help_command))
+    app.add_handler(CommandHandler("add",         add_keyword))
+    app.add_handler(CommandHandler("remove",      remove_keyword))
+    app.add_handler(CommandHandler("list",        list_keywords))
+    app.add_handler(CommandHandler("clear",       clear_keywords))
+    app.add_handler(CommandHandler("store",       set_store))
+    app.add_handler(CommandHandler("findstore",   find_store))
+    app.add_handler(CommandHandler("scan",        scan))
+    app.add_handler(CommandHandler("stop",        stop))
     app.add_handler(CommandHandler("confirmstop", confirm_stop))
-    app.add_handler(CommandHandler("approve", approve_user))
-    app.add_handler(CommandHandler("deny", deny_user))
+    app.add_handler(CommandHandler("approve",     approve_user))
+    app.add_handler(CommandHandler("deny",        deny_user))
+    app.add_handler(CallbackQueryHandler(button_handler))
     app.add_error_handler(error_handler)
 
-    # Weekly scan — every Thursday at 3:00pm Eastern
     eastern = ZoneInfo("America/New_York")
     app.job_queue.run_daily(
         weekly_scan,
         time=time(15, 0, 0, tzinfo=eastern),
-        days=(4,),  # 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+        days=(4,),  # 0=Sun … 4=Thu … 6=Sat
         name="weekly_bogo_scan",
-        job_kwargs={"misfire_grace_time": 300}  # run if up to 5 min late
+        job_kwargs={"misfire_grace_time": 300}
     )
 
     init_db()
