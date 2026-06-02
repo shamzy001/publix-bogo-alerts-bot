@@ -381,16 +381,24 @@ async def find_store(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         msg = f"🏪 Publix stores near {zip_code}:\n\n"
+        keyboard_rows = []
         for store in stores[:8]:
             name = store.get("name", "Unknown")
             address = store.get("address", {})
             street = address.get("streetAddress", "")
             city = address.get("city", "")
             store_id = store.get("weeklyAd", {}).get("storeId", "N/A")
-            msg += f"• {name}\n  {street}, {city}\n  ID: {store_id} → /store {store_id}\n\n"
+            msg += f"• {name}\n  {street}, {city}\n  ID: {store_id}\n\n"
+            if store_id != "N/A":
+                label = f"📍 {name}"
+                if len(label) > 40:
+                    label = label[:37] + "..."
+                keyboard_rows.append([InlineKeyboardButton(label, callback_data=f"setstore:{store_id}")])
 
-        await update.effective_message.reply_text(msg)
-        await update.effective_message.reply_text(SETUP_STEP2)
+        await update.effective_message.reply_text(
+            msg + "Tap a store below to select it:",
+            reply_markup=InlineKeyboardMarkup(keyboard_rows)
+        )
 
     except Exception:
         await update.effective_message.reply_text("❌ Couldn't look up stores right now. Try again later.")
@@ -630,6 +638,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Cancelled — you're still registered. 👍",
             reply_markup=main_menu_keyboard()
         )
+
+    # ── Set store (from findstore button) ────────────
+    elif data.startswith("setstore:"):
+        if not is_registered(users, chat_id):
+            await query.edit_message_text("Please send /start first to register.")
+            return
+        store_id = data[9:]
+        is_first_time = "store_id" not in users[chat_id] or not users[chat_id].get("keywords")
+        users[chat_id]["store_id"] = store_id
+        save_users(users)
+        await query.edit_message_text(f"✅ Store set to {store_id}!")
+        if is_first_time:
+            await context.bot.send_message(chat_id=chat_id, text=SETUP_STEP3)
+        else:
+            await context.bot.send_message(chat_id=chat_id, text="What's next?", reply_markup=main_menu_keyboard())
 
     # ── Admin: approve / deny ─────────────────────────
     elif data.startswith("approve:"):
