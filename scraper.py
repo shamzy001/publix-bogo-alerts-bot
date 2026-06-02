@@ -199,6 +199,9 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
     finally:
         driver.quit()
 
+    if not results:
+        logger.warning("Scraper returned 0 items — page may not have loaded correctly.")
+        return DataFrame(columns=["Product", "Deal", "Validity"])
     return DataFrame(results)
 
 
@@ -219,6 +222,9 @@ def passes_special_filters(product):
 
 
 def find_matching_deals(df, keywords):
+    if df.empty or "Product" not in df.columns:
+        return DataFrame(columns=["Product", "Deal", "Validity"])
+
     filtered = []
     seen_products = set()
 

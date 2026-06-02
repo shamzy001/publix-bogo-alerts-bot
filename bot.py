@@ -429,6 +429,10 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.reply_text(f"🔍 Scanning store {store_id}, hang tight... (this takes 2-3 minutes)")
 
     df = await asyncio.to_thread(get_bogo_deals, store_id)
+    if df.empty:
+        await context.bot.send_message(chat_id=chat_id, text="⚠️ Scrape returned 0 items — the page may not have loaded. Try again in a few minutes.")
+        await context.bot.send_message(chat_id=chat_id, text="What's next?", reply_markup=main_menu_keyboard())
+        return
     df_filtered = find_matching_deals(df, keywords)
     await asyncio.to_thread(send_deals_to_user, chat_id, name, df_filtered)
     await context.bot.send_message(chat_id=chat_id, text="What's next?", reply_markup=main_menu_keyboard())
@@ -549,6 +553,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         store_id = users[chat_id].get("store_id", DEFAULT_STORE_ID)
         await query.edit_message_text(f"🔍 Scanning store {store_id}, hang tight... (this takes 2-3 minutes)")
         df = await asyncio.to_thread(get_bogo_deals, store_id)
+        if df.empty:
+            await context.bot.send_message(chat_id=chat_id, text="⚠️ Scrape returned 0 items — the page may not have loaded. Try again in a few minutes.")
+            await context.bot.send_message(chat_id=chat_id, text="What's next?", reply_markup=main_menu_keyboard())
+            return
         df_filtered = find_matching_deals(df, keywords)
         await asyncio.to_thread(send_deals_to_user, chat_id, name, df_filtered)
         await context.bot.send_message(chat_id=chat_id, text="Scan complete! What's next?", reply_markup=main_menu_keyboard())
