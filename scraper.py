@@ -2,9 +2,7 @@
 
 import logging
 import shutil
-import subprocess
 from selenium import webdriver
-from selenium.common.exceptions import SessionNotCreatedException
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -17,11 +15,6 @@ import os
 import json
 import time
 import requests
-
-try:
-    import psutil
-except ImportError:
-    psutil = None
 
 load_dotenv()
 
@@ -113,73 +106,17 @@ def send_telegram(chat_id, message_text):
 # -----------------------------------------------------
 # SCRAPER
 # -----------------------------------------------------
-ORPHAN_MAX_AGE_SECONDS = 300  # generous vs. the ~2-3 min a normal scan takes
-
-
-def _reap_orphaned_chrome_processes():
-    """Kill leftover chrome/chromedriver processes from a previous crashed or
-    timed-out scan. This bot runs in one long-lived container (not a fresh one
-    per invocation), so anything still alive after ORPHAN_MAX_AGE_SECONDS is a
-    leak, not an in-flight scan — a normal scan finishes well within that
-    window. Safety net on top of the driver.quit() in the finally block below,
-    in case that ever fails to run (e.g. the process is killed outright).
-
-    Matches on chromedriver's own auto-generated profile-dir naming pattern
-    (a dot-prefixed dir under /tmp, e.g. /tmp/.org.chromium.Chromium.XXXXXX)
-    rather than process name, so this can never touch a real desktop browser
-    -- those use OS-standard profile locations, never a hidden /tmp dir like
-    this, which only chromedriver's automated sessions produce.
-    """
-    if psutil is None:
-        return
-
-    now = time.time()
-    for proc in psutil.process_iter(["cmdline", "create_time"]):
-        try:
-            cmdline = proc.info["cmdline"] or []
-            if not any(arg.startswith("--user-data-dir=/tmp/.") for arg in cmdline):
-                continue
-            age = now - proc.info["create_time"]
-            if age < ORPHAN_MAX_AGE_SECONDS:
-                continue
-            logger.warning(f"Killing orphaned scraper Chrome process (pid={proc.pid}, age={age:.0f}s)")
-            proc.kill()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-
-
-def _new_chrome_options(chrome_bin):
+def get_bogo_deals(store_id=DEFAULT_STORE_ID):
     options = Options()
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.add_argument("--disable-software-rasterizer")
-    # Chrome's normal multi-process model (browser + zygote + GPU process)
-    # is failing at the sandbox/fork level in this container -- every launch
-    # dies immediately after the GPU process's sandbox init, before chrome
-    # can even write its DevToolsActivePort file. Collapsing everything into
-    # one process sidesteps that fork/sandbox path entirely. --single-process
-    # is unsupported by upstream Chromium but is a standard workaround for
-    # this exact failure in restrictive/sandboxed cloud container runtimes.
-    options.add_argument("--no-zygote")
-    options.add_argument("--single-process")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
-    if chrome_bin:
-        options.binary_location = chrome_bin
-    return options
-
-
-CHROME_LAUNCH_MAX_ATTEMPTS = 3
-CHROME_LAUNCH_RETRY_DELAY_SECONDS = 3
-
-
-def get_bogo_deals(store_id=DEFAULT_STORE_ID):
-    _reap_orphaned_chrome_processes()
 
     # On Linux (Railway), find Chromium automatically; on Windows webdriver-manager handles it
     chrome_bin = (
@@ -187,45 +124,22 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
         or shutil.which("chromium")
         or shutil.which("chromium-browser")
     )
+    if chrome_bin:
+        options.binary_location = chrome_bin
 
     # Use system chromedriver if available (Railway/Docker), otherwise download via webdriver-manager
     chromedriver_path = (
         os.environ.get("CHROMEDRIVER_PATH")
         or shutil.which("chromedriver")
     )
-    driver_path = chromedriver_path or ChromeDriverManager().install()
+    service = Service(chromedriver_path) if chromedriver_path else Service(ChromeDriverManager().install())
 
-    for label, exe in (("chromium", chrome_bin), ("chromedriver", driver_path)):
-        try:
-            version = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10).stdout.strip()
-            logger.info(f"[diag] {label} ({exe}) version: {version}")
-        except Exception:
-            logger.warning(f"[diag] failed to get {label} version", exc_info=True)
+    driver = webdriver.Chrome(service=service, options=options)
 
-    # No explicit --user-data-dir: chromedriver auto-generates its own unique
-    # profile dir per session and auto-deletes it on driver.quit() -- which
-    # the try/finally below now guarantees always runs. Retrying on
-    # SessionNotCreatedException handles Chrome occasionally failing to start
-    # for reasons that don't survive into the driver log (the log entry with
-    # the real cause gets dropped when the process dies before it can flush).
-    driver = None
-    for attempt in range(1, CHROME_LAUNCH_MAX_ATTEMPTS + 1):
-        options = _new_chrome_options(chrome_bin)
-        service = Service(driver_path, log_output=subprocess.STDOUT)
-        try:
-            driver = webdriver.Chrome(service=service, options=options)
-            break
-        except SessionNotCreatedException:
-            logger.warning(f"Chrome failed to start on attempt {attempt}/{CHROME_LAUNCH_MAX_ATTEMPTS}", exc_info=True)
-            _reap_orphaned_chrome_processes()
-            if attempt == CHROME_LAUNCH_MAX_ATTEMPTS:
-                raise
-            time.sleep(CHROME_LAUNCH_RETRY_DELAY_SECONDS)
+    url = f"https://www.publix.com/savings/weekly-ad/bogo/?storeId={store_id}"
+    driver.get(url)
 
     try:
-        url = f"https://www.publix.com/savings/weekly-ad/bogo/?storeId={store_id}"
-        driver.get(url)
-
         WebDriverWait(driver, 40).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "li[id^='bogo-']"))
         )
@@ -280,11 +194,7 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
                 stagnant = 0
 
     finally:
-        if driver is not None:
-            try:
-                driver.quit()
-            except Exception:
-                logger.warning("driver.quit() failed during cleanup", exc_info=True)
+        driver.quit()
 
     if not results:
         logger.warning("Scraper returned 0 items — page may not have loaded correctly.")
