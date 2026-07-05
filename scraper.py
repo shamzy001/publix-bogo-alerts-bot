@@ -2,6 +2,7 @@
 
 import logging
 import shutil
+import tempfile
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -15,6 +16,11 @@ import os
 import json
 import time
 import requests
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 load_dotenv()
 
@@ -106,8 +112,48 @@ def send_telegram(chat_id, message_text):
 # -----------------------------------------------------
 # SCRAPER
 # -----------------------------------------------------
+CHROME_USER_DATA_DIR_MARKER = "chrome-user-data-"  # matches tempfile.mkdtemp prefix below
+ORPHAN_MAX_AGE_SECONDS = 300  # generous vs. the ~2-3 min a normal scan takes
+
+
+def _reap_orphaned_chrome_processes():
+    """Kill leftover chrome/chromedriver processes from a previous crashed or
+    timed-out scan. This bot runs in one long-lived container (not a fresh one
+    per invocation), so anything still alive after ORPHAN_MAX_AGE_SECONDS is a
+    leak, not an in-flight scan — a normal scan finishes well within that
+    window. Safety net on top of the driver.quit() in the finally block below,
+    in case that ever fails to run (e.g. the process is killed outright).
+
+    Matches strictly on our own --user-data-dir temp-dir marker (not on
+    process name like "chrome") so this can never touch a Chrome instance
+    that isn't one of our own scraping sessions — e.g. a real browser running
+    on the same machine during local/manual testing.
+    """
+    if psutil is None:
+        return
+
+    now = time.time()
+    for proc in psutil.process_iter(["cmdline", "create_time"]):
+        try:
+            cmdline = proc.info["cmdline"] or []
+            if not any(CHROME_USER_DATA_DIR_MARKER in arg for arg in cmdline):
+                continue
+            age = now - proc.info["create_time"]
+            if age < ORPHAN_MAX_AGE_SECONDS:
+                continue
+            logger.warning(f"Killing orphaned scraper Chrome process (pid={proc.pid}, age={age:.0f}s)")
+            proc.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+
 def get_bogo_deals(store_id=DEFAULT_STORE_ID):
+    _reap_orphaned_chrome_processes()
+
+    user_data_dir = tempfile.mkdtemp(prefix="chrome-user-data-")
+
     options = Options()
+    options.add_argument(f"--user-data-dir={user_data_dir}")
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
@@ -134,12 +180,13 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
     )
     service = Service(chromedriver_path) if chromedriver_path else Service(ChromeDriverManager().install())
 
-    driver = webdriver.Chrome(service=service, options=options)
-
-    url = f"https://www.publix.com/savings/weekly-ad/bogo/?storeId={store_id}"
-    driver.get(url)
-
+    driver = None
     try:
+        driver = webdriver.Chrome(service=service, options=options)
+
+        url = f"https://www.publix.com/savings/weekly-ad/bogo/?storeId={store_id}"
+        driver.get(url)
+
         WebDriverWait(driver, 40).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "li[id^='bogo-']"))
         )
@@ -194,7 +241,12 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
                 stagnant = 0
 
     finally:
-        driver.quit()
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                logger.warning("driver.quit() failed during cleanup", exc_info=True)
+        shutil.rmtree(user_data_dir, ignore_errors=True)
 
     if not results:
         logger.warning("Scraper returned 0 items — page may not have loaded correctly.")
