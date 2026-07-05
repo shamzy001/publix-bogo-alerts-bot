@@ -154,6 +154,16 @@ def _new_chrome_options(chrome_bin):
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
+    options.add_argument("--disable-software-rasterizer")
+    # Chrome's normal multi-process model (browser + zygote + GPU process)
+    # is failing at the sandbox/fork level in this container -- every launch
+    # dies immediately after the GPU process's sandbox init, before chrome
+    # can even write its DevToolsActivePort file. Collapsing everything into
+    # one process sidesteps that fork/sandbox path entirely. --single-process
+    # is unsupported by upstream Chromium but is a standard workaround for
+    # this exact failure in restrictive/sandboxed cloud container runtimes.
+    options.add_argument("--no-zygote")
+    options.add_argument("--single-process")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
