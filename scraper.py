@@ -2,6 +2,7 @@
 
 import logging
 import shutil
+import subprocess
 import tempfile
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -178,7 +179,14 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
         os.environ.get("CHROMEDRIVER_PATH")
         or shutil.which("chromedriver")
     )
-    service = Service(chromedriver_path) if chromedriver_path else Service(ChromeDriverManager().install())
+    driver_path = chromedriver_path or ChromeDriverManager().install()
+    service = Service(driver_path, service_args=["--verbose"], log_output=subprocess.STDOUT)
+
+    try:
+        usage = shutil.disk_usage(user_data_dir)
+        logger.info(f"[diag] tmp disk usage for {user_data_dir}: total={usage.total} used={usage.used} free={usage.free}")
+    except Exception:
+        logger.warning("[diag] disk_usage check failed", exc_info=True)
 
     driver = None
     try:
