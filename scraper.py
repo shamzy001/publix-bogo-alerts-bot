@@ -185,6 +185,13 @@ def get_bogo_deals(store_id=DEFAULT_STORE_ID):
     )
     driver_path = chromedriver_path or ChromeDriverManager().install()
 
+    for label, exe in (("chromium", chrome_bin), ("chromedriver", driver_path)):
+        try:
+            version = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10).stdout.strip()
+            logger.info(f"[diag] {label} ({exe}) version: {version}")
+        except Exception:
+            logger.warning(f"[diag] failed to get {label} version", exc_info=True)
+
     # No explicit --user-data-dir: chromedriver auto-generates its own unique
     # profile dir per session and auto-deletes it on driver.quit() -- which
     # the try/finally below now guarantees always runs. Retrying on
